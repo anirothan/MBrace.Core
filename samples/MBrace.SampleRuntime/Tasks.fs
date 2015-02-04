@@ -261,21 +261,6 @@ with
 
         let pickledTask = { Task = taskp ; Dependencies = dependencies ; Target = worker }
 
-
-        // rt.TaskQueue.UnindexedEnqueue <| PickledTask.CreateTask procInfo dependencies cts fp sc ec cc worker wf
-        // let task =
-        //     {
-        //         Type = typeof<'T>
-        //         ProcessInfo = procInfo
-        //         TaskId = taskId
-        //         StartTask = startTask
-        //         FaultPolicy = fp
-        //         Econt = ec
-        //         CancellationTokenSource = cts
-        //     }
-
-        // let taskp = VagrantRegistry.Pickler.PickleTyped taskP
-
         let storeEntities =
             StorageEntity.GatherStoreEntitiesInObjectGraph(startTask)
             |> Seq.map (fun s -> s.Id)
