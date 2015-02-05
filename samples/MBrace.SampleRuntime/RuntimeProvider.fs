@@ -8,13 +8,17 @@
 
 open System.Diagnostics
 
+open Nessos.FsPickler
 open Nessos.Thespian
 open Nessos.Thespian.Remote
+
+open Nessos.Vagabond
 
 open MBrace
 open MBrace.Continuation
 open MBrace.Workflows
 open MBrace.Runtime.InMemory
+open MBrace.Runtime.Vagabond
 open MBrace.Store
 open MBrace.Runtime
 
@@ -25,6 +29,8 @@ open MBrace.SampleRuntime.Actors
 /// IWorkerRef implementation for the runtime
 type Worker(procId : string) =
     let id = sprintf "sample runtime worker (id %s)" procId
+
+    member __.Id = id
 
     interface IWorkerRef with
         member __.Id = id
@@ -81,7 +87,7 @@ type ActorChannelProvider (state : RuntimeState) =
         member __.DisposeContainer _ = async.Zero()
 
 /// Scheduling implementation provider
-type RuntimeProvider private (state : RuntimeState, procInfo : ProcessInfo, dependencies, faultPolicy, taskId, context) =
+type RuntimeProvider private (state : RuntimeState, procInfo : ProcessInfo, dependencies : AssemblyId [], faultPolicy, taskId, context) =
 
     let failTargetWorker () = invalidOp <| sprintf "Cannot target worker when running in '%A' execution context" context
 
@@ -91,12 +97,8 @@ type RuntimeProvider private (state : RuntimeState, procInfo : ProcessInfo, depe
         |> Seq.toArray
 
     /// Creates a runtime provider instance for a provided task
-    static member FromTask state procInfo dependencies (task : Task) =
-        new RuntimeProvider(state, procInfo, dependencies, task.FaultPolicy, task.TaskId, Distributed)
-
-    /// Creates a runtime provider instance for in-memory computation
-    static member CreateInMemoryRuntime(state, procInfo : ProcessInfo) =
-        new RuntimeProvider(state, procInfo, [], FaultPolicy.NoRetry, "ThreadPool", ThreadParallel)
+    static member FromTask state dependencies (task : Task) =
+        new RuntimeProvider(state, task.ProcessInfo, dependencies, task.FaultPolicy, task.TaskId, Distributed)
 
     interface ICloudRuntimeProvider with
         member __.ProcessId = procInfo.ProcessId

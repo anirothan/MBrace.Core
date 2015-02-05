@@ -8,10 +8,8 @@ open NUnit.Framework
 open Nessos.Streams
 open MBrace.Streams
 open MBrace
+open MBrace.Store
 open System.IO
-open MBrace.SampleRuntime
-open MBrace.Client
-
 
 type Check =
     static member QuickThrowOnFailureConfig(maxNumber) = { Config.QuickThrowOnFailure with MaxTest = maxNumber }
@@ -97,30 +95,66 @@ type ``CloudStreams tests`` () as self =
         Check.QuickThrowOnFail(f, self.FsCheckMaxNumberOfTests)
 
     [<Test>]
-    member __.``ofCloudFiles`` () =
+    member __.``ofCloudFiles with ReadAllText`` () =
         let f(xs : string []) =
-            let cfs = 
-                xs |> Array.map(fun text -> 
-                        CloudFile.Create(
-                            (fun (stream : Stream) -> 
-                                        async {
-                                            use sw = new StreamWriter(stream)
-                                            sw.Write(text) })))
-                |> Cloud.Parallel
-                |> run
+            let cfs = xs 
+                     |> Array.map(fun text -> CloudFile.WriteAllText(text))
+                     |> Cloud.Parallel
+                     |> run
 
             let x = cfs |> CloudStream.ofCloudFiles CloudFileReader.ReadAllText
                         |> CloudStream.toArray
                         |> run
                         |> Set.ofArray
 
-            let y = cfs |> Array.map (fun cf -> CloudFile.ReadAllText(cf))
-                        |> Cloud.Parallel
-                        |> run
-                        |> Set.ofArray
+            let y = cfs |> Array.map (fun f -> __.RunLocal(CloudFile.ReadAllText(f)))
+                        |> Set.ofSeq
 
             Assert.AreEqual(y, x)
         Check.QuickThrowOnFail(f, self.FsCheckMaxNumberOfTests)
+
+    [<Test>]
+    member __.``ofCloudFiles with ReadLines`` () =
+        let f(xs : string [][]) =
+            let cfs = xs 
+                     |> Array.map(fun text -> CloudFile.WriteAllLines(text))
+                     |> Cloud.Parallel
+                     |> run
+
+            let x = cfs |> CloudStream.ofCloudFiles CloudFileReader.ReadLines
+                        |> CloudStream.collect Stream.ofSeq
+                        |> CloudStream.toArray
+                        |> run
+                        |> Set.ofArray
+            
+            let y = cfs |> Array.map (fun f -> __.RunLocal(CloudFile.ReadAllLines(f)))
+                        |> Seq.collect id
+                        |> Set.ofSeq
+
+            Assert.AreEqual(y, x)
+        Check.QuickThrowOnFail(f, self.FsCheckMaxNumberOfTests)
+
+    [<Test>]
+    member __.``ofCloudFiles with ReadAllLines`` () =
+        let f(xs : string [][]) =
+            let cfs = xs 
+                     |> Array.map(fun text -> CloudFile.WriteAllLines(text))
+                     |> Cloud.Parallel
+                     |> run
+
+            let x = cfs |> CloudStream.ofCloudFiles CloudFileReader.ReadAllLines
+                        |> CloudStream.collect Stream.ofArray
+                        |> CloudStream.toArray
+                        |> run
+                        |> Set.ofArray
+
+            let y = cfs |> Array.map (fun f -> __.RunLocal(CloudFile.ReadAllLines(f)))
+                        |> Seq.collect id
+                        |> Set.ofSeq
+
+            Assert.AreEqual(y, x)
+        Check.QuickThrowOnFail(f, self.FsCheckMaxNumberOfTests)
+
 
     [<Test>]
     member __.``map`` () =
@@ -206,38 +240,22 @@ type ``CloudStreams tests`` () as self =
         Check.QuickThrowOnFail(f, self.FsCheckMaxNumberOfTests)
 
 
-//type ``LocalRuntime Streams Tests`` () =
-//    inherit ``CloudStreams tests`` ()
-//
-//    let inmem = LocalRuntime.Create()
-//
-//    override __.FsCheckMaxNumberOfTests = 10  
-//    override __.Run(expr : Cloud<'T>) : 'T = inmem.Run expr
+open MBrace.Runtime.Vagabond
+open MBrace.Runtime.Serialization
+open MBrace.Runtime.Store
 
 
-[<Category("CloudStreams.Cluster")>]
-
-type ``SampleRuntime Streams Tests`` () =
+type ``InMemory CloudStreams tests`` () =
     inherit ``CloudStreams tests`` ()
-        
-    let mutable currentRuntime : MBraceRuntime option = None
-      
-    override __.FsCheckMaxNumberOfTests = 10  
-    override __.Run(expr : Cloud<'T>) : 'T = currentRuntime.Value.Run(expr, faultPolicy = FaultPolicy.NoRetry)
-    override __.RunLocal(expr : Cloud<'T>) : 'T = currentRuntime.Value.RunLocal(expr)
 
-    [<TestFixtureSetUp>]
-    member __.InitRuntime() =
-        match currentRuntime with
-        | Some runtime -> runtime.KillAllWorkers()
-        | None -> ()
-            
-        MBraceRuntime.WorkerExecutable <- Path.Combine(__SOURCE_DIRECTORY__, "../../bin/MBrace.SampleRuntime.exe")
-        let runtime = MBraceRuntime.InitLocal(4)
-        currentRuntime <- Some runtime
+    static do VagabondRegistry.Initialize()
 
-    [<TestFixtureTearDown>]
-    member __.FiniRuntime() =
-        match currentRuntime with
-        | None -> invalidOp "No runtime specified in test fixture."
-        | Some r -> r.KillAllWorkers() ; currentRuntime <- None
+    let fileStore = FileSystemStore.CreateUniqueLocal()
+    let serializer = new FsPicklerBinaryStoreSerializer()
+    let objcache = InMemoryCache.Create()
+    let fsConfig = CloudFileStoreConfiguration.Create(fileStore, serializer, cache = objcache)
+    let imem = MBrace.Client.LocalRuntime.Create(fileConfig = fsConfig)
+
+    override __.Run(workflow : Cloud<'T>) = imem.Run workflow
+    override __.RunLocal(workflow : Cloud<'T>) = imem.Run workflow
+    override __.FsCheckMaxNumberOfTests = 100

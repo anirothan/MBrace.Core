@@ -7,7 +7,6 @@ using System.Text;
 using System.Threading.Tasks;
 using MBrace.Streams.CSharp;
 using Nessos.Streams.CSharp;
-using MBrace.SampleRuntime;
 using System.IO;
 using System.Runtime.CompilerServices;
 using FsCheck;
@@ -31,49 +30,12 @@ namespace MBrace.Streams.CSharp.Tests
         }
     }
 
-    public class SampleRuntimeCloudStreamTests : CloudStreamsTests
-    {
-        MBraceRuntime rt;
-
-        string GetFileDir([CallerFilePath]string file = "") { return file; }
-
-        [TestFixtureSetUp]
-        public void SetUp()
-        { 
-            var path = Path.GetDirectoryName(this.GetFileDir());
-            MBraceRuntime.WorkerExecutable = Path.Combine(path, "../../bin/MBrace.SampleRuntime.exe");
-            rt = MBraceRuntime.InitLocal(3);
-        }
-
-        [TestFixtureTearDown]
-        public void TearDown()
-        {
-            rt.KillAllWorkers();
-        }
-
-        internal override T Run<T>(Cloud<T> c)
-        {
-            return rt.Run(c, null, FSharpOption<FaultPolicy>.Some(FaultPolicy.NoRetry));
-        }
-
-        internal override T RunLocal<T>(Cloud<T> c)
-        {
-            return rt.RunLocal(c, null);
-        }
-
-        internal override int MaxNumberOfTests
-        {
-            get { return 10; }
-        }
-    }
-
-
     [TestFixture]
     abstract public class CloudStreamsTests
     {
-        abstract internal T Run<T>(MBrace.Cloud<T> c);
-        abstract internal T RunLocal<T>(MBrace.Cloud<T> c);
-        abstract internal int MaxNumberOfTests { get; }
+        abstract public T Run<T>(MBrace.Cloud<T> c);
+        abstract public T RunLocal<T>(MBrace.Cloud<T> c);
+        abstract public int MaxNumberOfTests { get; }
 
         internal T[] Run<T>(IEnumerable<Cloud<T>> wfs)
         {
@@ -158,7 +120,7 @@ namespace MBrace.Streams.CSharp.Tests
                     this.Run(cfiles
                         .AsCloudStream<string>(CloudFileReader.ReadAllText)
                         .ToArray());
-                var y = this.Run(cfiles.Select(cf => MBrace.CloudFile.ReadAllText(cf, null)));
+                var y = cfiles.Select(f => this.RunLocal(CloudFile.ReadAllText(f, null)));
 
                 var s1 = new HashSet<string>(x);
                 var s2 = new HashSet<string>(y);
@@ -169,19 +131,18 @@ namespace MBrace.Streams.CSharp.Tests
         [Test]
         public void OfCloudFilesWithReadLines()
         {
-            FSharpFunc<string[], bool>.FromConverter(xs =>
+            FSharpFunc<string[][], bool>.FromConverter(xs =>
             {
                 var cfiles =
-                    this.Run(xs.Select(text => MBrace.CloudFile.WriteLines(text.Split('\n'), null, null)));
+                    this.Run(xs.Select(text => MBrace.CloudFile.WriteAllLines(text, null, null)));
 
                 var x =
                     this.Run(cfiles
                         .AsCloudStream(CloudFileReader.ReadLines)
                         .SelectMany(l => l.AsStream())
                         .ToArray());
-                var y = this.Run(cfiles
-                        .Select(cf => MBrace.CloudFile.ReadLines(cf, null))
-                        ).SelectMany(l => l);
+                var y = cfiles.Select(f => this.RunLocal(CloudFile.ReadAllLines(f,null)))
+                        .SelectMany(id => id);
 
                 var s1 = new HashSet<string>(x);
                 var s2 = new HashSet<string>(y);
@@ -192,19 +153,19 @@ namespace MBrace.Streams.CSharp.Tests
         [Test]
         public void OfCloudFilesWithReadAllLines()
         {
-            FSharpFunc<string[], bool>.FromConverter(xs =>
+            FSharpFunc<string[][], bool>.FromConverter(xs =>
             {
                 var cfiles =
-                    this.Run(xs.Select(text => MBrace.CloudFile.WriteLines(text.Split('\n'), null, null)));
+                    this.Run(xs.Select(text => MBrace.CloudFile.WriteAllLines(text, null, null)));
 
                 var x =
                     this.Run(cfiles
                         .AsCloudStream(CloudFileReader.ReadAllLines)
                         .SelectMany(l => l.AsStream())
                         .ToArray());
-                var y = this.Run(cfiles
-                        .Select(cf => MBrace.CloudFile.ReadLines(cf, null))
-                        ).SelectMany(l => l);
+
+                var y = cfiles.Select(f => this.RunLocal(CloudFile.ReadAllLines(f, null)))
+                        .SelectMany(id => id);
 
                 var s1 = new HashSet<string>(x);
                 var s2 = new HashSet<string>(y);

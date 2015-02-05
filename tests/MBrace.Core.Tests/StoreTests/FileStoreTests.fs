@@ -44,11 +44,15 @@ type ``FileStore Tests`` (nParallel : int) as self =
     [<Test>]
     member __.``2. MBrace : CloudRef - caching`` () = 
         if __.IsCachingStore then
-            let b = runRemote <| CloudRef.New [1..10000]
-            b.Cache() |> runLocal |> shouldEqual true
-            let a1 = b.Value |> runLocal
-            let a2 = b.Value |> runLocal
-            obj.ReferenceEquals(a1, a2) |> shouldEqual true
+            cloud {
+                let! c = CloudRef.New [1..10000]
+                let! r = c.Cache()
+                r |> shouldEqual true
+                let! v1 = c.Value
+                let! v2 = c.Value
+                obj.ReferenceEquals(v1,v2) |> shouldEqual true
+                return ()
+            } |> runRemote
 
     [<Test>]
     member __.``2. MBrace : CloudRef - Parallel`` () =
@@ -74,11 +78,15 @@ type ``FileStore Tests`` (nParallel : int) as self =
     [<Test>]
     member __.``2. MBrace : CloudSequence - caching`` () = 
         if __.IsCachingStore then
-            let b = runRemote <| CloudSequence.New [1..10000]
-            b.Cache() |> runLocal |> shouldEqual true
-            let a1 = b.ToArray() |> runLocal
-            let a2 = b.ToArray() |> runLocal
-            obj.ReferenceEquals(a1, a2) |> shouldEqual true
+            cloud {
+                let! c = CloudSequence.New [1..10000]
+                let! success = c.Cache()
+                success |> shouldEqual true
+                let! v1 = c.ToArray()
+                let! v2 = c.ToArray()
+                obj.ReferenceEquals(v1, v2) |> shouldEqual true
+                return ()
+            } |> runRemote
 
     [<Test>]
     member __.``2. MBrace : CloudSequence - parallel`` () =
@@ -106,7 +114,7 @@ type ``FileStore Tests`` (nParallel : int) as self =
     [<Test>]
     member __.``2. MBrace : CloudSequence - of deserializer`` () =
         cloud {
-            use! file = CloudFile.WriteLines([1..100] |> List.map (fun i -> string i))
+            use! file = CloudFile.WriteAllLines([1..100] |> List.map (fun i -> string i))
             let deserializer (s : System.IO.Stream) =
                 seq {
                     use textReader = new System.IO.StreamReader(s)
@@ -133,7 +141,7 @@ type ``FileStore Tests`` (nParallel : int) as self =
         let file =
             cloud {
                 let text = Seq.init 1000 (fun _ -> "lorem ipsum dolor sit amet")
-                return! CloudFile.WriteLines(text)
+                return! CloudFile.WriteAllLines(text)
             } |> runRemote
 
         cloud {
@@ -153,19 +161,16 @@ type ``FileStore Tests`` (nParallel : int) as self =
                     stream.Flush()
                     stream.Dispose() })
 
-            let! bytes = CloudFile.ReadAllBytes(f)
-            return bytes
+            return! CloudFile.ReadAllBytes f
         } |> runRemote |> shouldEqual (mk n)
 
     [<Test>]
     member __.``2. MBrace : CloudFile - get by name`` () =
         cloud {
             use! f = CloudFile.WriteAllBytes([|1uy..100uy|])
-            let! t = Cloud.StartChild(cloud { 
-                return! CloudFile.ReadAllBytes f.Path
-            })
-
-            return! t
+            let! t = Cloud.StartChild(CloudFile.ReadAllBytes f.Path)
+            let! bytes = t
+            return bytes
         } |> runRemote |> shouldEqual [|1uy .. 100uy|]
 
     [<Test>]
@@ -365,9 +370,14 @@ type ``Local FileStore Tests`` (config : CloudFileStoreConfiguration) =
     member __.``1. FileStore : StoreClient - CloudFile`` () =
         let sc = __.FileStoreClient
         let lines = Array.init 10 string
-        let file = sc.File.WriteLines(lines)
+        let file = sc.File.WriteAllLines(lines)
         sc.File.ReadLines(file)
+        |> Seq.toArray
         |> shouldEqual lines
+
+        sc.File.ReadAllLines(file)
+        |> shouldEqual lines
+
 
     [<TestFixtureTearDown>]
     member test.``FileStore Cleanup`` () =
