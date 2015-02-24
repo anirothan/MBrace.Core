@@ -12,6 +12,35 @@ MBraceRuntime.WorkerExecutable <- __SOURCE_DIRECTORY__ + "/../../bin/MBrace.Samp
 
 let runtime = MBraceRuntime.InitLocal(4)
 
+let cloudRefSchedullingTest n =
+    cloud {
+
+        let createRef n = cloud {
+            let! wref = Cloud.CurrentWorker
+            printfn "CREATING %d in worker %O" n wref
+            return! CloudRef.New n
+        }
+
+        let deRef n cref = cloud {
+            let! wref = Cloud.CurrentWorker
+            printfn "DEREFING %d in worker %O" n wref
+            return! CloudRef.Read cref
+        }
+
+        let! crefs =
+            [ for i in 1..n -> createRef i]
+            |> Cloud.Parallel
+
+        let! drefs =
+            [ for i in 0..n-1 -> deRef (i+1) crefs.[i]]
+            |> Cloud.Parallel
+
+        return ()
+    }
+
+runtime.Run(cloudRefSchedullingTest 4)
+
+
 runtime.Run(
     cloud {
         let! sp,rp = CloudChannel.New<int> ()
