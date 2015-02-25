@@ -18,7 +18,9 @@ let cloudRefSchedullingTest n =
         let createRef n = cloud {
             let! wref = Cloud.CurrentWorker
             printfn "CREATING %d in worker %O" n wref
-            return! CloudRef.New n
+            let! ref = CloudRef.New n
+            let! _ = CloudRef.Cache ref
+            return ref
         }
 
         let deRef n cref = cloud {

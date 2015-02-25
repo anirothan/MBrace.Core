@@ -72,7 +72,8 @@ let Parallel (state : RuntimeState) procInfo dependencies fp (computations : seq
 
             // Create tasks and enqueue
             computations
-            |> Array.mapi (fun i (c,w) -> PickledTask.CreateTask procInfo dependencies childCts fp (onSuccess i) onException onCancellation w c)
+            //|> Array.mapi (fun i (c,w) -> PickledTask.CreateTask procInfo dependencies childCts fp (onSuccess i) onException onCancellation w c)
+            |> Array.mapi (fun i (c,w) -> (procInfo, dependencies, childCts, fp, (onSuccess i), onException, onCancellation, w, c))
             |> state.EnqueueTasks
                     
             TaskExecutionMonitor.TriggerCompletion ctx })
@@ -138,7 +139,8 @@ let Choice (state : RuntimeState) procInfo dependencies fp (computations : seq<C
 
             // create child tasks
             computations
-            |> Array.mapi (fun i (c,w) -> PickledTask.CreateTask procInfo dependencies childCts fp onSuccess onException onCancellation w c)
+            // |> Array.mapi (fun i (c,w) -> PickledTask.CreateTask procInfo dependencies childCts fp onSuccess onException onCancellation w c)
+            |> Array.mapi (fun i (c,w) -> (procInfo, dependencies, childCts, fp, onSuccess, onException, onCancellation, w, c))
             |> state.EnqueueTasks
                     
             TaskExecutionMonitor.TriggerCompletion ctx })

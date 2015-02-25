@@ -228,7 +228,7 @@ with
                     |> Map.ofArray
 
                 let cachePicture = rt.StoreCacheMap.GetPicture(storeEntities)
-                let selectedWorkerId =
+                let candidate =
                     cachePicture
                     |> Seq.collect (fun (storeEntity, workerIds) -> workerIds |> Seq.map (fun workerId -> storeEntity, workerId))
                     |> Seq.groupBy snd
@@ -237,10 +237,12 @@ with
                                        | None -> -(Seq.length data)
                                        | Some count -> -(Seq.length data) + count)
                     |> Seq.map fst
-                    |> Seq.head
+                    |> Seq.tryFind (fun _ -> true)
 
-
-                rt.TaskQueue.Enqueue(selectedWorkerId, pickledTask)
+                match candidate with
+                | Some selectedWorkerId ->
+                    rt.TaskQueue.Enqueue(selectedWorkerId, pickledTask)
+                | None -> rt.TaskQueue.UnindexedEnqueue(pickledTask)
 
 
 
@@ -248,7 +250,10 @@ with
     ///     Atomically schedule a collection of tasks
     /// </summary>
     /// <param name="tasks">Tasks to be enqueued</param>
-    member rt.EnqueueTasks tasks = for task in tasks do rt.TaskQueue.UnindexedEnqueue(task)
+    member rt.EnqueueTasks tasks =
+        for (procInfo, dependencies, cts, fp, sc, ec, cc, worker, wf) in tasks do
+            rt.EnqueueTask procInfo dependencies cts fp sc ec cc worker wf
+            //rt.TaskQueue.UnindexedEnqueue(task)
 
     /// <summary>
     ///     Schedules a cloud workflow as a distributed result cell.
