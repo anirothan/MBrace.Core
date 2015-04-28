@@ -604,8 +604,8 @@ type ``CloudFlow tests`` () as self =
     [<Test>]
     member __.``2. CloudFlow : concat`` () =
         let f (xs : int [] []) =
-            let x = xs |> Array.map CloudFlow.OfArray |> CloudFlow.OfArray |> CloudFlow.concat |> CloudFlow.toArray |> run
-            let y = xs |> Array.concat
+            let x = xs |> Array.map CloudFlow.OfArray |> CloudFlow.OfArray |> CloudFlow.concat |> CloudFlow.filter (fun v -> v % 2 = 0) |> CloudFlow.toArray |> run
+            let y = xs |> Array.concat |> Array.filter (fun v -> v % 2 = 0)
             Assert.AreEqual(Array.sort y, Array.sort x)
 
         Check.QuickThrowOnFail(f, self.FsCheckMaxNumberOfTests)
