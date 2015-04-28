@@ -614,7 +614,7 @@ type ``CloudFlow tests`` () as self =
     member __.``2. CloudFlow : join`` () =
         let f (xs : int[], ys : int[]) =
             let x = xs |> CloudFlow.OfArray |> CloudFlow.join id id (CloudFlow.OfArray ys) |> CloudFlow.toArray |> run
-            let y = ys.AsParallel().Join(xs.AsParallel(), new Func<_,_>(id), new Func<_,_>(id), new Func<_, _, _>(fun k v -> k, v)).ToArray()
+            let y = ys.AsParallel().Join(xs.AsParallel(), new Func<_,_>(id), new Func<_,_>(id), new Func<_, _, _>(fun k v -> k, (k, v))).ToArray()
             Assert.AreEqual(Array.sort y, Array.sort x)
 
         Check.QuickThrowOnFail(f, self.FsCheckMaxNumberOfTests)
