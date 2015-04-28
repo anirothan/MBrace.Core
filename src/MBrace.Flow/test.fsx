@@ -59,3 +59,17 @@ let query3 =
         |> CloudFlow.collect(fun i -> [|1..10000|] |> Seq.map (fun j -> string i, j))
         |> CloudFlow.sortBy snd 100
         |> CloudFlow.toArray)
+
+
+let concatTestFlow =
+    let src = [| CloudFlow.OfArray source; CloudFlow.OfArray source |]
+    runtime.Run(
+        CloudFlow.OfArray src
+        |> CloudFlow.concat
+        |> CloudFlow.toArray
+    )
+
+let concatTestSeq =
+    let src = [| source; source|]
+    src |> Array.concat
+        

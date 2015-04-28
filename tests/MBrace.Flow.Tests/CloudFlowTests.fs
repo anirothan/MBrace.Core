@@ -600,3 +600,21 @@ type ``CloudFlow tests`` () as self =
             let y = xs |> Seq.map (fun v -> v + 1) |> Seq.toArray
             (set x) = (set y)
         Check.QuickThrowOnFail(f, self.FsCheckMaxNumberOfIOBoundTests)
+
+    [<Test>]
+    member __.``2. CloudFlow : concat`` () =
+        let f (xs : int [] []) =
+            let x = xs |> Array.map CloudFlow.OfArray |> CloudFlow.OfArray |> CloudFlow.concat |> CloudFlow.toArray |> run
+            let y = xs |> Array.concat
+            Assert.AreEqual(Array.sort y, Array.sort x)
+
+        Check.QuickThrowOnFail(f, self.FsCheckMaxNumberOfTests)
+
+    [<Test>]
+    member __.``2. CloudFlow : joinBy`` () =
+        let f (xs : int[], ys : int[]) =
+            let x = xs |> CloudFlow.OfArray |> CloudFlow.joinBy id id (CloudFlow.OfArray ys) |> CloudFlow.toArray |> run
+            let y = ys.AsParallel().Join(xs.AsParallel(), new Func<_,_>(id), new Func<_,_>(id), new Func<_, _, _>(fun k v -> k, v)).ToArray()
+            Assert.AreEqual(Array.sort y, Array.sort x)
+
+        Check.QuickThrowOnFail(f, self.FsCheckMaxNumberOfTests)

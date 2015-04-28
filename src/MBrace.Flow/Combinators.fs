@@ -1226,3 +1226,63 @@ module CloudFlow =
     /// <returns>A flow of distinct elements.</returns>
     let inline distinct (source : CloudFlow<'T>) : CloudFlow<'T> =
         distinctBy id source
+
+    let inline concat (source : CloudFlow<CloudFlow<'T>>) : CloudFlow<'T> =
+        { new CloudFlow<'T> with
+            member __.DegreeOfParallelism = source.DegreeOfParallelism
+            member __.WithEvaluators (collectorF : Local<Collector<'T, 'S>>) (projection : 'S -> Local<'R>) combiner =
+                cloud {
+                    let! cts = Cloud.CreateCancellationTokenSource()
+                    let collectorF' (cloudCts : ICloudCancellationTokenSource) =
+                        local {
+                            let cts = CancellationTokenSource.CreateLinkedTokenSource(cloudCts.Token.LocalToken)
+                            let comps = new ResizeArray<Cloud<'R>>()
+                            let collector = { new Collector<CloudFlow<'T>, Cloud<'R []>> with
+                                              member __.DegreeOfParallelism = source.DegreeOfParallelism
+                                              member __.Iterator() =
+                                                  { Index = ref -1;
+                                                    Func = (fun flow ->
+                                                                let x = flow.WithEvaluators collectorF projection combiner
+                                                                comps.Add(x)
+                                                           );
+                                                    Cts = cts;
+                                                  }
+                                              member __.Result =
+                                                  let ks = comps.ToArray()
+                                                  //let ks = comps
+                                                  cloud {
+                                                      let rs = new ResizeArray<'R>()
+                                                      for k in ks do
+                                                          let! r = k
+                                                          rs.Add(r)
+                                                      return rs.ToArray()
+                                                  }
+                                            }
+                            return collector
+                        }
+                    let combiner' (ks : Cloud<'R []> []) =
+                        local {
+                            let sequence =
+                                cloud {
+                                    let results = new ResizeArray<'R>()
+                                    for k in ks do
+                                        let! rs = k
+                                        results.AddRange(rs)
+                                    return results.ToArray()
+                                }
+                            return sequence
+                        }
+                    let! flowEvalSequence = source.WithEvaluators (collectorF' cts) local.Return combiner'
+                    let! results = flowEvalSequence
+                    let! result = combiner results
+                    return result
+                }
+        }
+
+    let inline joinBy (projectionInner: 'T -> 'Key)
+                      (projectionOuter: 'U -> 'Key)
+                      (outer : CloudFlow<'U>)
+                      (inner : CloudFlow<'T>) : CloudFlow<'T * 'U> =
+         inner
+         |> map (fun v -> let k = projectionInner v in outer |> filter (fun v' -> let k' = projectionOuter v' in k = k') |> map (fun v' -> v, v'))
+         |> concat
