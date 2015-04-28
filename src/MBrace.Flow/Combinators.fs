@@ -1279,10 +1279,10 @@ module CloudFlow =
                 }
         }
 
-    let inline joinBy (projectionInner: 'T -> 'Key)
-                      (projectionOuter: 'U -> 'Key)
-                      (outer : CloudFlow<'U>)
-                      (inner : CloudFlow<'T>) : CloudFlow<'T * 'U> =
+    let inline join (projectionInner: 'T -> 'Key)
+                    (projectionOuter: 'U -> 'Key)
+                    (outer : CloudFlow<'U>)
+                    (inner : CloudFlow<'T>) : CloudFlow<'T * 'U> =
          inner
          |> map (fun v -> let k = projectionInner v in outer |> filter (fun v' -> let k' = projectionOuter v' in k = k') |> map (fun v' -> v, v'))
          |> concat
