@@ -1295,6 +1295,14 @@ module CloudFlow =
         |> map (fun v -> let k = projectionInner v in outer |> map (fun v' -> let k' = projectionOuter v' in if k = k' then k, (v, Some v') else k, (v, None)))
         |> concat
 
+    let inline rightOuterJoin (projectionInner : 'T -> 'Key)
+                              (projectionOuter : 'U -> 'Key)
+                              (outer : CloudFlow<'U>)
+                              (inner : CloudFlow<'T>) : CloudFlow<'Key * ('T option * 'U)> =
+        inner
+        |> map (fun v -> let k = projectionInner v in outer |> map (fun v' -> let k' = projectionOuter v' in if k = k' then k', (Some v, v') else k', (None, v')))
+        |> concat
+
     let inline cartesian (outer : CloudFlow<'U>) (inner : CloudFlow<'T>) : CloudFlow<'T * 'U> =
         inner
         |> map (fun v -> outer |> map (fun v' -> v, v'))
