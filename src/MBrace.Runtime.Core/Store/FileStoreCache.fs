@@ -5,6 +5,9 @@ open System.IO
 open System.Collections.Generic
 open System.Collections.Concurrent
 open System.Runtime.Serialization
+open System.Security.Cryptography
+open System.Text
+open System.Threading
 
 open MBrace
 open MBrace.Store
@@ -13,28 +16,27 @@ open MBrace.Runtime.Utils
 open MBrace.Runtime.Utils.String
 open MBrace.Runtime.Utils.Retry
 
-/// Defines cache behavior.
-[<Flags>]
-type CacheBehavior = 
-    /// Do not cache.
-    | None = 0uy
-    /// Cache only on write.
-    | OnWrite = 1uy
-    /// Cache only on read.
-    | OnRead = 2uy
-    /// Cache on read/write.
-    | Default = 3uy
-
 /// File store caching facility
 [<Sealed; AutoSerializable(false)>]
-type FileStoreCache private (sourceStore : ICloudFileStore, localCacheStore : ICloudFileStore, 
-                                cacheBehavior : CacheBehavior, localCacheContainer : string) =
+type FileStoreCache private (sourceStore : ICloudFileStore, localCacheStore : ICloudFileStore, localCacheContainer : string) =
+    static let hash = new ThreadLocal<_>(fun () -> MD5.Create() :> HashAlgorithm)
+    let getCachedFileName (path : string) (tag : ETag) =
+        let digestedId =
+            path + ":" + tag
+            |> Encoding.Default.GetBytes
+            |> hash.Value.ComputeHash
+            |> Convert.BytesToBase32
 
-    let getCachedFileName (path : string) = localCacheStore.Combine [|localCacheContainer ; Convert.StringToBase32 path|]
+        let fileName = sourceStore.GetFileName path
+        localCacheStore.Combine [|localCacheContainer ; fileName + "-" + digestedId |]
+
     let cacheEvent = new Event<string> ()
 
-    member this.Container = localCacheContainer
+    /// Cache container in local store.
+    member this.CacheContainer = localCacheContainer
+    /// Local caching store in current machine.
     member this.CacheStore = localCacheStore
+    /// Source store to be cached.
     member this.SourceStore = sourceStore
 
     /// <summary>
@@ -42,10 +44,8 @@ type FileStoreCache private (sourceStore : ICloudFileStore, localCacheStore : IC
     /// </summary>
     /// <param name="target">Target file store to cache files from.</param>
     /// <param name="localCacheStore">Local file store to cache files to.</param>
-    /// <param name="cacheBehavior">Caching behavior. Defaults to Read/Write caching.</param>
     /// <param name="localCacheContainer">Directory in local store to contain cached files. Defaults to self-assigned.</param>
-    static member Create(target : ICloudFileStore, localCacheStore : ICloudFileStore, ?cacheBehavior, ?localCacheContainer) : FileStoreCache =
-        let cacheBehavior = defaultArg cacheBehavior CacheBehavior.Default
+    static member Create(target : ICloudFileStore, localCacheStore : ICloudFileStore, ?localCacheContainer : string) : FileStoreCache =
         let localCacheContainer =
             match localCacheContainer with 
             | None -> localCacheStore.GetRandomDirectoryName()
@@ -53,94 +53,52 @@ type FileStoreCache private (sourceStore : ICloudFileStore, localCacheStore : IC
 
         do localCacheStore.CreateDirectory(localCacheContainer) |> Async.RunSynchronously
 
-        new FileStoreCache(target, localCacheStore, cacheBehavior, localCacheContainer)
+        new FileStoreCache(target, localCacheStore, localCacheContainer)
 
-    interface ICloudFileStore with
-        member x.BeginRead(path: string): Async<Stream> = async {
-            if cacheBehavior.HasFlag CacheBehavior.OnRead then
-                let cachedFileName = getCachedFileName path
+    // TODO : cache range
 
-                let rec attemptRead retries = async {
-                    let! sourceExists, cacheExists = Async.Parallel(sourceStore.FileExists path, localCacheStore.FileExists cachedFileName)
+    /// <summary>
+    ///     Begins reading a cached copy of the stored file.
+    ///     If file does not exist in local cache it will be downloaded
+    ///     before reading begins.
+    /// </summary>
+    /// <param name="path">Path to remote file.</param>
+    member __.BeginReadCached(path: string) : Async<Stream> = async {
+        let rec attemptRead retries = async {
+            let! etag = sourceStore.TryGetETag path
 
-                    if sourceExists then
-                        if cacheExists then
-                            try return! localCacheStore.BeginRead cachedFileName
-                            with _ when retries > 0 ->
-                                // retry in case of concurrent cache writes
-                                return! attemptRead (retries - 1)
-                        else
-                            try
-                                use! stream = sourceStore.BeginRead path
-                                in do! localCacheStore.OfStream(stream, cachedFileName)
+            match etag with
+            | Some tag ->
+                let cachedFileName = getCachedFileName path tag
+                let! cacheExists = localCacheStore.FileExists cachedFileName
+                if cacheExists then
+                    try return! localCacheStore.BeginRead cachedFileName
+                    with _ when retries > 0 ->
+                        // retry in case of concurrent cache writes
+                        do! Async.Sleep 100
+                        return! attemptRead (retries - 1)
+                else
+                    try
+                        let! streamOpt = sourceStore.TryBeginRead(path, tag)
+                        match streamOpt with
+                        | None -> 
+                            do! Async.Sleep 1000
+                            return! attemptRead retries
 
-                                let _ = cacheEvent.TriggerAsTask path
+                        | Some stream ->
+                            use stream = stream
+                            let cachedFileName = getCachedFileName path tag
+                            let! _ = localCacheStore.OfStream(stream, cachedFileName)
+                            let _ = cacheEvent.TriggerAsTask path
+                            return! localCacheStore.BeginRead cachedFileName
 
-                                return! localCacheStore.BeginRead cachedFileName
-                            with _ when retries > 0 ->
-                                // retry in case of concurrent cache writes
-                                return! attemptRead (retries - 1)
-                    else
-                        return raise <| FileNotFoundException(path)
-                }
+                    with _ when retries > 0 ->
+                        // retry in case of concurrent cache writes
+                        do! Async.Sleep 100
+                        return! attemptRead (retries - 1)
 
-                return! attemptRead 3
-            else
-                return! sourceStore.BeginRead path
+            | None -> return raise <| FileNotFoundException(path)
         }
-        
-        member x.Write(path: string, writer : Stream -> Async<'R>): Async<'R> = async {
-            if cacheBehavior.HasFlag CacheBehavior.OnWrite then
-                let cachedFile = getCachedFileName path
-                // check if files exist
-                let! cachedFileExists, sourceFileExists = Async.Parallel(localCacheStore.FileExists cachedFile, sourceStore.FileExists path)
-                // fail if source path exists in store, delete local copy if already cached
-                if sourceFileExists then raise <| IOException(sprintf "The file '%s' already exists in store." path)
-                if cachedFileExists then do! retryAsync (RetryPolicy.Retry(3, 0.5<sec>)) (localCacheStore.DeleteFile cachedFile)
-                // write contents to local cache store
-                let! r = localCacheStore.Write(cachedFile, writer)
-                // use stream copying API writing to remote store
-                use! stream = localCacheStore.BeginRead cachedFile
-                in do! sourceStore.OfStream(stream, path)
-                // trigger cache event and return result
-                let _ = cacheEvent.TriggerAsTask path
-                return r
-            else
-                return! sourceStore.Write(path, writer)
-        }
-        
-        member x.Combine(paths: string []): string = sourceStore.Combine paths
-        
-        member x.CreateDirectory(directory: string): Async<unit> = sourceStore.CreateDirectory directory
-        
-        member x.GetRandomDirectoryName(): string = sourceStore.GetRandomDirectoryName()
-        
-        member x.DeleteDirectory(directory: string, recursiveDelete: bool): Async<unit> = sourceStore.DeleteDirectory(directory, recursiveDelete)
-        
-        member x.DeleteFile(path: string): Async<unit> = sourceStore.DeleteFile(path)
-        
-        member x.DirectoryExists(directory: string): Async<bool> = sourceStore.DirectoryExists(directory)
-        
-        member x.EnumerateDirectories(directory: string): Async<string []> = sourceStore.EnumerateDirectories(directory)
-        
-        member x.EnumerateFiles(directory: string): Async<string []> = sourceStore.EnumerateFiles(directory)
-        
-        member x.FileExists(path: string): Async<bool> = sourceStore.FileExists(path)
-        
-        member x.GetDirectoryName(path: string): string = sourceStore.GetDirectoryName(path)
-        
-        member x.GetFileName(path: string): string = sourceStore.GetFileName(path)
-        
-        member x.GetFileSize(path: string): Async<int64> = sourceStore.GetFileSize(path)
-        
-        member x.GetRootDirectory(): string = sourceStore.GetRootDirectory()
-        
-        member x.Id: string = sourceStore.Id
-        
-        member x.Name: string = sourceStore.Name
-        
-        member x.OfStream(source: Stream, target: string): Async<unit> = sourceStore.OfStream(source, target)
-        
-        member x.ToStream(sourceFile: string, target: Stream): Async<unit> = sourceStore.ToStream(sourceFile, target)
-        
-        member x.TryGetFullPath(path: string): string option = sourceStore.TryGetFullPath(path)
+
+        return! attemptRead 3
+    }
